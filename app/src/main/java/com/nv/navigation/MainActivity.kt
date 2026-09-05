@@ -1,305 +1,467 @@
 package com.nv.navigation
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Canvas
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.util.Locale
+import kotlin.math.roundToInt
 
-private val NvDark = Color(0xFF07111D)
-private val NvPanel = Color(0xE6111E2C)
-private val NvBlue = Color(0xFF00BFFF)
-private val NvGreen = Color(0xFF6CFF4A)
-private val NvMuted = Color(0xFF93A4B8)
+private val NvDark = Color(0xFF06101B)
+private val NvPanel = Color(0xEE101B2A)
+private val NvBlue = Color(0xFF13C7FF)
+private val NvGreen = Color(0xFF68FF3D)
+private val NvMuted = Color(0xFFA5B4C8)
+private val NvRed = Color(0xFFFF6B6B)
+
+enum class Profile(val fa: String) {
+    FASTEST("سریع‌ترین"), BALANCED("متعادل"), ECO("کم‌مصرف")
+}
+
+data class RouteResult(
+    val index: Int,
+    val distanceMeters: Double,
+    val durationSeconds: Double,
+    val points: List<GeoPoint>
+) {
+    val distanceKm: Double get() = distanceMeters / 1000.0
+    val durationMin: Int get() = (durationSeconds / 60.0).roundToInt()
+    val energyWh: Int get() = (distanceKm * 145.0 + durationMin * 2.0).roundToInt()
+
+    fun score(profile: Profile): Double {
+        val time = durationSeconds / 3600.0
+        val distance = distanceKm / 100.0
+        val energy = energyWh / 15000.0
+        return when (profile) {
+            Profile.FASTEST -> 0.75 * time + 0.15 * distance + 0.10 * energy
+            Profile.BALANCED -> 0.50 * time + 0.25 * distance + 0.25 * energy
+            Profile.ECO -> 0.30 * time + 0.20 * distance + 0.50 * energy
+        }
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Configuration.getInstance().userAgentValue = packageName
         setContent {
-            MaterialTheme {
-                NvHomeScreen()
-            }
-        }
-    }
-}
-
-@Composable
-private fun NvHomeScreen() {
-    var origin by remember { mutableStateOf("موقعیت فعلی") }
-    var destination by remember { mutableStateOf("") }
-    var routeStarted by remember { mutableStateOf(false) }
-
-    Surface(modifier = Modifier.fillMaxSize(), color = NvDark) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            NvMapBackground()
-
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 14.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    primary = NvGreen,
+                    secondary = NvBlue,
+                    background = NvDark,
+                    surface = NvPanel
+                )
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = NvPanel)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(12.dp)
-                                        .background(NvGreen, CircleShape)
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                Text("NV", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
-                            }
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            MiniChip("☀ 18°")
-                            MiniChip("★ دیدنی‌ها")
-                        }
-                    }
-
-                    Card(
-                        shape = RoundedCornerShape(22.dp),
-                        colors = CardDefaults.cardColors(containerColor = NvPanel)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            RouteField(
-                                label = "مبدأ",
-                                value = origin,
-                                accent = NvBlue,
-                                onValueChange = { origin = it },
-                                onClear = { origin = "" }
-                            )
-                            RouteField(
-                                label = "مقصد",
-                                value = destination,
-                                accent = NvGreen,
-                                onValueChange = { destination = it },
-                                onClear = { destination = "" }
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TextButton(onClick = {
-                                    val oldOrigin = origin
-                                    origin = destination
-                                    destination = oldOrigin
-                                }) {
-                                    Text("⇅ تعویض مبدأ و مقصد", color = NvBlue)
-                                }
-                                Text("GPS اختیاری", color = NvMuted, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (destination.isNotBlank()) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = NvPanel)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text("مسیر پیشنهادی NV", color = Color.White, fontWeight = FontWeight.Bold)
-                                    Text("سریع‌ترین مسیر • ترافیک کمتر", color = NvMuted, fontSize = 12.sp)
-                                }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text("24 دقیقه", color = NvGreen, fontWeight = FontWeight.Bold)
-                                    Text("12.8 km", color = Color.White, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
-
-                    Button(
-                        onClick = { if (destination.isNotBlank()) routeStarted = !routeStarted },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = NvGreen)
-                    ) {
-                        Text(
-                            if (routeStarted) "توقف مسیریابی" else "شروع مسیریابی",
-                            color = Color(0xFF07111D),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Black
-                        )
-                    }
-                }
+                NvFunctionalApp()
             }
         }
     }
 }
 
 @Composable
-private fun RouteField(
+private fun NvFunctionalApp() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
+
+    var originText by remember { mutableStateOf("موقعیت فعلی") }
+    var destinationText by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("مقصد را وارد کنید") }
+    var loading by remember { mutableStateOf(false) }
+    var profile by remember { mutableStateOf(Profile.BALANCED) }
+    var routes by remember { mutableStateOf<List<RouteResult>>(emptyList()) }
+    var selectedIndex by remember { mutableIntStateOf(0) }
+    var originPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var destinationPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var navigating by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        status = if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        ) "مجوز موقعیت فعال شد؛ محاسبه مسیر را بزنید" else "بدون مجوز موقعیت، برای مبدأ یک نام یا مختصات وارد کنید"
+    }
+
+    fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    fun calculateRoute() {
+        if (destinationText.isBlank()) {
+            status = "مقصد را وارد کنید"
+            return
+        }
+        if (originText.trim() == "موقعیت فعلی" && !hasLocationPermission()) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            return
+        }
+
+        scope.launch {
+            loading = true
+            status = "در حال یافتن مبدأ و مقصد…"
+            try {
+                val start = if (originText.trim() == "موقعیت فعلی") {
+                    val location = fused.lastLocation.await()
+                        ?: fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).await()
+                        ?: error("GPS موقعیت فعلی را برنگرداند")
+                    GeoPoint(location.latitude, location.longitude)
+                } else {
+                    parseCoordinates(originText) ?: geocode(originText)
+                        ?: error("مبدأ پیدا نشد")
+                }
+
+                val end = parseCoordinates(destinationText) ?: geocode(destinationText)
+                    ?: error("مقصد پیدا نشد")
+
+                originPoint = start
+                destinationPoint = end
+                status = "در حال محاسبه مسیرهای واقعی…"
+                val fetched = fetchRoutes(start, end)
+                if (fetched.isEmpty()) error("هیچ مسیر قابل رانندگی پیدا نشد")
+                routes = fetched
+                selectedIndex = fetched.minBy { it.score(profile) }.index
+                status = "${fetched.size} مسیر واقعی پیدا شد • منبع مسیر: OSRM/OpenStreetMap"
+            } catch (e: Exception) {
+                routes = emptyList()
+                status = "خطا: ${e.message ?: "ارتباط با سرویس مسیر برقرار نشد"}"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    LaunchedEffect(profile, routes) {
+        if (routes.isNotEmpty()) selectedIndex = routes.minBy { it.score(profile) }.index
+    }
+
+    LaunchedEffect(navigating, destinationPoint) {
+        val destination = destinationPoint ?: return@LaunchedEffect
+        while (navigating) {
+            delay(60_000)
+            if (!hasLocationPermission()) continue
+            try {
+                val location = fused.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null).await() ?: continue
+                val current = GeoPoint(location.latitude, location.longitude)
+                val updated = fetchRoutes(current, destination)
+                if (updated.isNotEmpty()) {
+                    originPoint = current
+                    routes = updated
+                    selectedIndex = updated.minBy { it.score(profile) }.index
+                    status = "مسیر با موقعیت فعلی بازبرنامه‌ریزی شد"
+                }
+            } catch (_: Exception) {
+                status = "بازبرنامه‌ریزی این نوبت انجام نشد؛ مسیر قبلی حفظ شد"
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(NvDark)) {
+        Header()
+
+        Card(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = NvPanel)
+        ) {
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                NvField("مبدأ", originText, NvBlue, { originText = it }, { originText = "" })
+                NvField("مقصد", destinationText, NvGreen, { destinationText = it }, { destinationText = "" })
+                Text(
+                    "برای مختصات می‌توانید به‌صورت 35.6892,51.3890 وارد کنید.",
+                    color = NvMuted,
+                    fontSize = 10.sp
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Profile.entries.forEach { item ->
+                        Surface(
+                            modifier = Modifier.weight(1f).clickable { profile = item },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (item == profile) NvGreen else Color(0xFF1A2939)
+                        ) {
+                            Text(
+                                item.fa,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                textAlign = TextAlign.Center,
+                                color = if (item == profile) NvDark else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Button(
+                    onClick = { calculateRoute() },
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = NvGreen)
+                ) {
+                    Text(if (loading) "در حال محاسبه…" else "محاسبه مسیر واقعی", color = NvDark, fontWeight = FontWeight.Black)
+                }
+            }
+        }
+
+        NvMap(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            origin = originPoint,
+            destination = destinationPoint,
+            routes = routes,
+            selectedIndex = selectedIndex
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = NvPanel)
+        ) {
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(status, color = Color.White, fontSize = 11.sp)
+                routes.sortedBy { it.score(profile) }.forEach { route ->
+                    val active = route.index == selectedIndex
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().clickable { selectedIndex = route.index },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (active) Color(0xFF19372E) else Color(0xFF162433)
+                    ) {
+                        Row(
+                            Modifier.padding(9.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("مسیر ${route.index + 1}", color = if (active) NvGreen else Color.White, fontWeight = FontWeight.Bold)
+                                Text(String.format(Locale.US, "%.1f km", route.distanceKm), color = NvMuted, fontSize = 10.sp)
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("${route.durationMin} دقیقه", color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("انرژی تخمینی ${route.energyWh} Wh", color = NvMuted, fontSize = 9.sp)
+                            }
+                        }
+                    }
+                }
+                if (routes.isNotEmpty()) {
+                    Button(
+                        onClick = { navigating = !navigating },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = if (navigating) NvRed else NvBlue)
+                    ) {
+                        Text(if (navigating) "توقف بازبرنامه‌ریزی" else "شروع بازبرنامه‌ریزی هر ۶۰ ثانیه", color = NvDark, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(
+                    "این نسخه از نقشه و مسیر واقعی استفاده می‌کند. ترافیک زنده هنوز متصل نشده است.",
+                    color = NvMuted,
+                    fontSize = 9.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Header() {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("NV", color = NvGreen, fontSize = 23.sp, fontWeight = FontWeight.Black)
+        Text("SMART NAVIGATION • FUNCTIONAL v3", color = NvBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun NvField(
     label: String,
     value: String,
     accent: Color,
-    onValueChange: (String) -> Unit,
+    onChange: (String) -> Unit,
     onClear: () -> Unit
 ) {
     OutlinedTextField(
         value = value,
-        onValueChange = onValueChange,
+        onValueChange = onChange,
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         label = { Text(label) },
-        leadingIcon = {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .background(accent, CircleShape)
-            )
-        },
         trailingIcon = {
-            if (value.isNotBlank()) {
-                TextButton(onClick = onClear) {
-                    Text("×", color = Color.White, fontSize = 22.sp)
-                }
-            }
-        }
+            if (value.isNotBlank()) TextButton(onClick = onClear) { Text("×", color = Color.White, fontSize = 20.sp) }
+        },
+        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = accent, cursorColor = accent)
     )
 }
 
 @Composable
-private fun MiniChip(text: String) {
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = NvPanel)
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            color = Color.White,
-            fontSize = 12.sp
-        )
+private fun NvMap(
+    modifier: Modifier,
+    origin: GeoPoint?,
+    destination: GeoPoint?,
+    routes: List<RouteResult>,
+    selectedIndex: Int
+) {
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            MapView(ctx).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                controller.setZoom(5.5)
+                controller.setCenter(GeoPoint(32.0, 53.0))
+            }
+        },
+        update = { map ->
+            map.overlays.clear()
+
+            origin?.let {
+                Marker(map).apply {
+                    position = it
+                    title = "مبدأ"
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    map.overlays.add(this)
+                }
+            }
+            destination?.let {
+                Marker(map).apply {
+                    position = it
+                    title = "مقصد"
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    map.overlays.add(this)
+                }
+            }
+
+            routes.forEach { route ->
+                Polyline(map).apply {
+                    setPoints(route.points)
+                    outlinePaint.strokeWidth = if (route.index == selectedIndex) 11f else 5f
+                    outlinePaint.color = if (route.index == selectedIndex) 0xFF68FF3D.toInt() else 0x6613C7FF
+                    map.overlays.add(this)
+                }
+            }
+
+            val selected = routes.firstOrNull { it.index == selectedIndex }
+            if (selected != null && selected.points.isNotEmpty()) {
+                map.zoomToBoundingBox(selected.pointsBoundingBox(), true, 70)
+            } else if (origin != null) {
+                map.controller.setZoom(15.0)
+                map.controller.animateTo(origin)
+            }
+            map.invalidate()
+        }
+    )
+}
+
+private fun List<GeoPoint>.pointsBoundingBox(): org.osmdroid.util.BoundingBox {
+    val north = maxOf { it.latitude }
+    val south = minOf { it.latitude }
+    val east = maxOf { it.longitude }
+    val west = minOf { it.longitude }
+    return org.osmdroid.util.BoundingBox(north, east, south, west)
+}
+
+private fun parseCoordinates(text: String): GeoPoint? {
+    val parts = text.trim().split(',')
+    if (parts.size != 2) return null
+    val lat = parts[0].trim().toDoubleOrNull() ?: return null
+    val lon = parts[1].trim().toDoubleOrNull() ?: return null
+    if (lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
+    return GeoPoint(lat, lon)
+}
+
+private suspend fun geocode(query: String): GeoPoint? = withContext(Dispatchers.IO) {
+    val encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8.toString())
+    val url = URL("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=$encoded")
+    val conn = (url.openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 12_000
+        readTimeout = 12_000
+        setRequestProperty("User-Agent", "NVSmartNavigation/3.0")
+        setRequestProperty("Accept-Language", "fa,en")
+    }
+    try {
+        if (conn.responseCode !in 200..299) return@withContext null
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val arr = JSONArray(body)
+        if (arr.length() == 0) return@withContext null
+        val item = arr.getJSONObject(0)
+        GeoPoint(item.getString("lat").toDouble(), item.getString("lon").toDouble())
+    } finally {
+        conn.disconnect()
     }
 }
 
-@Composable
-private fun NvMapBackground() {
-    Canvas(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(NvDark)
-    ) {
-        val w = size.width
-        val h = size.height
-
-        for (i in 1..7) {
-            drawLine(
-                color = Color(0xFF10273A),
-                start = Offset(0f, h * i / 8f),
-                end = Offset(w, h * (i - 0.7f) / 8f),
-                strokeWidth = 2f
-            )
+private suspend fun fetchRoutes(start: GeoPoint, end: GeoPoint): List<RouteResult> = withContext(Dispatchers.IO) {
+    val endpoint = "https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?alternatives=true&overview=full&geometries=geojson&steps=false"
+    val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 15_000
+        readTimeout = 20_000
+        setRequestProperty("User-Agent", "NVSmartNavigation/3.0")
+    }
+    try {
+        if (conn.responseCode !in 200..299) error("خطای سرویس مسیر ${conn.responseCode}")
+        val body = conn.inputStream.bufferedReader().use { it.readText() }
+        val root = JSONObject(body)
+        if (root.optString("code") != "Ok") error("سرویس مسیر پاسخ معتبر نداد")
+        val arr = root.getJSONArray("routes")
+        buildList {
+            for (i in 0 until arr.length()) {
+                val route = arr.getJSONObject(i)
+                val coordinates = route.getJSONObject("geometry").getJSONArray("coordinates")
+                val points = ArrayList<GeoPoint>(coordinates.length())
+                for (j in 0 until coordinates.length()) {
+                    val pair = coordinates.getJSONArray(j)
+                    points.add(GeoPoint(pair.getDouble(1), pair.getDouble(0)))
+                }
+                add(
+                    RouteResult(
+                        index = i,
+                        distanceMeters = route.getDouble("distance"),
+                        durationSeconds = route.getDouble("duration"),
+                        points = points
+                    )
+                )
+            }
         }
-
-        val road = Path().apply {
-            moveTo(w * 0.12f, h)
-            cubicTo(w * 0.25f, h * 0.72f, w * 0.73f, h * 0.73f, w * 0.62f, h * 0.48f)
-            cubicTo(w * 0.55f, h * 0.34f, w * 0.80f, h * 0.28f, w * 0.86f, h * 0.18f)
-        }
-
-        drawPath(
-            path = road,
-            color = Color(0xFF17334A),
-            style = Stroke(width = 42f, cap = StrokeCap.Round)
-        )
-        drawPath(
-            path = road,
-            color = NvBlue.copy(alpha = 0.45f),
-            style = Stroke(width = 16f, cap = StrokeCap.Round)
-        )
-        drawPath(
-            path = road,
-            color = NvGreen,
-            style = Stroke(width = 7f, cap = StrokeCap.Round)
-        )
-
-        drawCircle(
-            color = NvGreen.copy(alpha = 0.25f),
-            radius = 34f,
-            center = Offset(w * 0.86f, h * 0.18f)
-        )
-        drawCircle(
-            color = NvGreen,
-            radius = 16f,
-            center = Offset(w * 0.86f, h * 0.18f)
-        )
-
-        drawArc(
-            color = NvBlue.copy(alpha = 0.18f),
-            startAngle = 200f,
-            sweepAngle = 120f,
-            useCenter = false,
-            topLeft = Offset(w * 0.03f, h * 0.22f),
-            size = Size(w * 0.94f, h * 0.52f),
-            style = Stroke(width = 3f)
-        )
+    } finally {
+        conn.disconnect()
     }
 }
