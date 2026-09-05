@@ -12,8 +12,8 @@ android {
         applicationId = "com.nv.smartnavigation"
         minSdk = 29
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0-smart"
+        versionCode = 3
+        versionName = "3.0-functional"
     }
 
     buildFeatures {
@@ -42,6 +42,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
