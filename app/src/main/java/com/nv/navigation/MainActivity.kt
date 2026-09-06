@@ -4,13 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,23 +39,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
+import org.osmdroid.config.Configuration
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
 import java.util.Locale
 import kotlin.math.roundToLong
 
@@ -65,11 +66,6 @@ private val NvPanel = Color(0xF2111E2C)
 private val NvBlue = Color(0xFF00BFFF)
 private val NvGreen = Color(0xFF6CFF4A)
 private val NvMuted = Color(0xFF93A4B8)
-
-private const val IranNorth = 39.80
-private const val IranSouth = 24.40
-private const val IranWest = 44.00
-private const val IranEast = 63.35
 
 private data class PinnedLocation(
     val latitude: Double,
@@ -91,6 +87,7 @@ private data class PinnedLocation(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Configuration.getInstance().userAgentValue = packageName
         setContent {
             MaterialTheme {
                 NvHomeScreen()
@@ -110,7 +107,7 @@ private fun NvHomeScreen() {
 
     Surface(modifier = Modifier.fillMaxSize(), color = NvDark) {
         Box(modifier = Modifier.fillMaxSize()) {
-            NvMapBackground(
+            NvInteractiveMap(
                 pinnedLocation = pinnedLocation,
                 onPinSelected = { pin ->
                     pinnedLocation = pin
@@ -413,109 +410,69 @@ private fun MiniChip(text: String) {
 }
 
 @Composable
-private fun NvMapBackground(
+private fun NvInteractiveMap(
     pinnedLocation: PinnedLocation?,
     onPinSelected: (PinnedLocation) -> Unit
 ) {
     val hapticFeedback = LocalHapticFeedback.current
 
-    Canvas(
+    AndroidView(
         modifier = Modifier
             .fillMaxSize()
-            .background(NvDark)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { position ->
-                        val normalizedY = (position.y / size.height.toFloat())
-                            .coerceIn(0f, 1f)
-                            .toDouble()
-                        val normalizedX = (position.x / size.width.toFloat())
-                            .coerceIn(0f, 1f)
-                            .toDouble()
-                        val latitude = IranNorth - normalizedY * (IranNorth - IranSouth)
-                        val longitude = IranWest + normalizedX * (IranEast - IranWest)
-                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onPinSelected(PinnedLocation(latitude, longitude))
-                    }
+            .background(NvDark),
+        factory = { context ->
+            MapView(context).apply {
+                id = View.generateViewId()
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                minZoomLevel = 3.5
+                maxZoomLevel = 20.0
+                controller.setZoom(5.5)
+                controller.setCenter(GeoPoint(32.4279, 53.6880))
+
+                overlays.add(
+                    MapEventsOverlay(
+                        object : MapEventsReceiver {
+                            override fun singleTapConfirmedHelper(point: GeoPoint?): Boolean = false
+
+                            override fun longPressHelper(point: GeoPoint?): Boolean {
+                                point ?: return false
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onPinSelected(
+                                    PinnedLocation(
+                                        latitude = point.latitude,
+                                        longitude = point.longitude
+                                    )
+                                )
+                                return true
+                            }
+                        }
+                    )
                 )
             }
-    ) {
-        val w = size.width
-        val h = size.height
-
-        for (i in 1..7) {
-            drawLine(
-                color = Color(0xFF10273A),
-                start = Offset(0f, h * i / 8f),
-                end = Offset(w, h * (i - 0.7f) / 8f),
-                strokeWidth = 2f
-            )
+        },
+        update = { mapView ->
+            updateMapMarker(mapView, pinnedLocation)
         }
+    )
+}
 
-        val road = Path().apply {
-            moveTo(w * 0.12f, h)
-            cubicTo(w * 0.25f, h * 0.72f, w * 0.73f, h * 0.73f, w * 0.62f, h * 0.48f)
-            cubicTo(w * 0.55f, h * 0.34f, w * 0.80f, h * 0.28f, w * 0.86f, h * 0.18f)
-        }
-
-        drawPath(
-            path = road,
-            color = Color(0xFF17334A),
-            style = Stroke(width = 42f, cap = StrokeCap.Round)
-        )
-        drawPath(
-            path = road,
-            color = NvBlue.copy(alpha = 0.45f),
-            style = Stroke(width = 16f, cap = StrokeCap.Round)
-        )
-        drawPath(
-            path = road,
-            color = NvGreen,
-            style = Stroke(width = 7f, cap = StrokeCap.Round)
-        )
-
-        drawCircle(
-            color = NvGreen.copy(alpha = 0.25f),
-            radius = 34f,
-            center = Offset(w * 0.86f, h * 0.18f)
-        )
-        drawCircle(
-            color = NvGreen,
-            radius = 16f,
-            center = Offset(w * 0.86f, h * 0.18f)
-        )
-
-        drawArc(
-            color = NvBlue.copy(alpha = 0.18f),
-            startAngle = 200f,
-            sweepAngle = 120f,
-            useCenter = false,
-            topLeft = Offset(w * 0.03f, h * 0.22f),
-            size = Size(w * 0.94f, h * 0.52f),
-            style = Stroke(width = 3f)
-        )
-
-        pinnedLocation?.let { pin ->
-            val pinX = ((pin.longitude - IranWest) / (IranEast - IranWest) * w)
-                .toFloat()
-                .coerceIn(0f, w)
-            val pinY = ((IranNorth - pin.latitude) / (IranNorth - IranSouth) * h)
-                .toFloat()
-                .coerceIn(0f, h)
-            val markerCenter = Offset(pinX, (pinY - 30f).coerceAtLeast(30f))
-
-            drawLine(
-                color = NvGreen,
-                start = markerCenter,
-                end = Offset(pinX, pinY),
-                strokeWidth = 9f,
-                cap = StrokeCap.Round
-            )
-            drawCircle(NvGreen.copy(alpha = 0.24f), radius = 38f, center = markerCenter)
-            drawCircle(NvGreen, radius = 24f, center = markerCenter)
-            drawCircle(NvDark, radius = 9f, center = markerCenter)
-        }
+private fun updateMapMarker(mapView: MapView, pin: PinnedLocation?) {
+    val oldMarkers = mapView.overlays.filterIsInstance<Marker>()
+    if (pin == null) {
+        mapView.overlays.removeAll(oldMarkers.toSet())
+        mapView.invalidate()
+        return
     }
+
+    val marker = oldMarkers.firstOrNull() ?: Marker(mapView).also {
+        it.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+        mapView.overlays.add(it)
+    }
+    marker.position = GeoPoint(pin.latitude, pin.longitude)
+    marker.title = pin.nvCode
+    marker.snippet = pin.coordinates
+    mapView.invalidate()
 }
 
 private fun createQrBitmap(value: String, size: Int = 768): Bitmap {
