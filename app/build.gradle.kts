@@ -12,8 +12,8 @@ android {
         applicationId = "com.nv.navigation"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     buildFeatures {
@@ -45,5 +45,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
