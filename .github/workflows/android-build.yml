@@ -29,8 +29,15 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
 
+      - name: Validate debug APK
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -t app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NV-debug-apk
+          name: NV-long-press-QR-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

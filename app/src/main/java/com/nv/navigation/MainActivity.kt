@@ -1,10 +1,17 @@
 package com.nv.navigation
 
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,16 +45,48 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.MultiFormatWriter
+import java.util.Locale
+import kotlin.math.roundToLong
 
 private val NvDark = Color(0xFF07111D)
-private val NvPanel = Color(0xE6111E2C)
+private val NvPanel = Color(0xF2111E2C)
 private val NvBlue = Color(0xFF00BFFF)
 private val NvGreen = Color(0xFF6CFF4A)
 private val NvMuted = Color(0xFF93A4B8)
+
+private const val IranNorth = 39.80
+private const val IranSouth = 24.40
+private const val IranWest = 44.00
+private const val IranEast = 63.35
+
+private data class PinnedLocation(
+    val latitude: Double,
+    val longitude: Double
+) {
+    val nvCode: String
+        get() = "NV-${(latitude * 100_000).roundToLong()}-${(longitude * 100_000).roundToLong()}"
+
+    val coordinates: String
+        get() = String.format(Locale.US, "%.5f, %.5f", latitude, longitude)
+
+    val qrPayload: String
+        get() {
+            val point = String.format(Locale.US, "%.6f,%.6f", latitude, longitude)
+            return "geo:$point?q=$point($nvCode)"
+        }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,13 +101,24 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun NvHomeScreen() {
+    val context = LocalContext.current
     var origin by remember { mutableStateOf("موقعیت فعلی") }
     var destination by remember { mutableStateOf("") }
     var routeStarted by remember { mutableStateOf(false) }
+    var pinnedLocation by remember { mutableStateOf(loadPinnedLocation(context)) }
+    var showQr by remember { mutableStateOf(false) }
 
     Surface(modifier = Modifier.fillMaxSize(), color = NvDark) {
         Box(modifier = Modifier.fillMaxSize()) {
-            NvMapBackground()
+            NvMapBackground(
+                pinnedLocation = pinnedLocation,
+                onPinSelected = { pin ->
+                    pinnedLocation = pin
+                    destination = pin.nvCode
+                    savePinnedLocation(context, pin)
+                    showQr = true
+                }
+            )
 
             Column(
                 modifier = Modifier
@@ -145,9 +195,46 @@ private fun NvHomeScreen() {
                             }
                         }
                     }
+
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = NvPanel)
+                    ) {
+                        Text(
+                            text = "برای انتخاب مکان، انگشت خود را روی نقشه نگه دارید",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            color = NvGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    pinnedLocation?.let { pin ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showQr = true },
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = NvPanel)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(13.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("● مکان سنجاق‌شده", color = NvGreen, fontWeight = FontWeight.Bold)
+                                    Text(pin.coordinates, color = NvMuted, fontSize = 12.sp)
+                                }
+                                Text("نمایش QR", color = NvBlue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
                     if (destination.isNotBlank()) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -183,10 +270,95 @@ private fun NvHomeScreen() {
                     ) {
                         Text(
                             if (routeStarted) "توقف مسیریابی" else "شروع مسیریابی",
-                            color = Color(0xFF07111D),
+                            color = NvDark,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Black
                         )
+                    }
+                }
+            }
+
+            if (showQr && pinnedLocation != null) {
+                QrOverlay(
+                    pinnedLocation = pinnedLocation!!,
+                    onShare = { sharePinnedLocation(context, pinnedLocation!!) },
+                    onDismiss = { showQr = false }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun QrOverlay(
+    pinnedLocation: PinnedLocation,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val blocker = remember { MutableInteractionSource() }
+    val qrImage = remember(pinnedLocation.qrPayload) {
+        createQrBitmap(pinnedLocation.qrPayload).asImageBitmap()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .clickable(
+                interactionSource = blocker,
+                indication = null,
+                onClick = {}
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.padding(24.dp),
+            shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF132334))
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("QR مکان NV", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                Text(
+                    pinnedLocation.nvCode,
+                    color = NvGreen,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Image(
+                    bitmap = qrImage,
+                    contentDescription = "QR مکان سنجاق‌شده",
+                    modifier = Modifier
+                        .size(232.dp)
+                        .background(Color.White)
+                        .padding(10.dp)
+                )
+                Text(
+                    pinnedLocation.coordinates,
+                    color = NvMuted,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+                Text("این مکان ذخیره شد", color = NvGreen, fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("بستن", color = Color.White)
+                    }
+                    Button(
+                        onClick = onShare,
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = NvGreen)
+                    ) {
+                        Text("اشتراک", color = NvDark, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -241,11 +413,32 @@ private fun MiniChip(text: String) {
 }
 
 @Composable
-private fun NvMapBackground() {
+private fun NvMapBackground(
+    pinnedLocation: PinnedLocation?,
+    onPinSelected: (PinnedLocation) -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .background(NvDark)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { position ->
+                        val normalizedY = (position.y / size.height.toFloat())
+                            .coerceIn(0f, 1f)
+                            .toDouble()
+                        val normalizedX = (position.x / size.width.toFloat())
+                            .coerceIn(0f, 1f)
+                            .toDouble()
+                        val latitude = IranNorth - normalizedY * (IranNorth - IranSouth)
+                        val longitude = IranWest + normalizedX * (IranEast - IranWest)
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onPinSelected(PinnedLocation(latitude, longitude))
+                    }
+                )
+            }
     ) {
         val w = size.width
         val h = size.height
@@ -301,5 +494,77 @@ private fun NvMapBackground() {
             size = Size(w * 0.94f, h * 0.52f),
             style = Stroke(width = 3f)
         )
+
+        pinnedLocation?.let { pin ->
+            val pinX = ((pin.longitude - IranWest) / (IranEast - IranWest) * w)
+                .toFloat()
+                .coerceIn(0f, w)
+            val pinY = ((IranNorth - pin.latitude) / (IranNorth - IranSouth) * h)
+                .toFloat()
+                .coerceIn(0f, h)
+            val markerCenter = Offset(pinX, (pinY - 30f).coerceAtLeast(30f))
+
+            drawLine(
+                color = NvGreen,
+                start = markerCenter,
+                end = Offset(pinX, pinY),
+                strokeWidth = 9f,
+                cap = StrokeCap.Round
+            )
+            drawCircle(NvGreen.copy(alpha = 0.24f), radius = 38f, center = markerCenter)
+            drawCircle(NvGreen, radius = 24f, center = markerCenter)
+            drawCircle(NvDark, radius = 9f, center = markerCenter)
+        }
     }
+}
+
+private fun createQrBitmap(value: String, size: Int = 768): Bitmap {
+    val matrix = MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        val row = y * size
+        for (x in 0 until size) {
+            pixels[row + x] = if (matrix[x, y]) {
+                android.graphics.Color.BLACK
+            } else {
+                android.graphics.Color.WHITE
+            }
+        }
+    }
+    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+        setPixels(pixels, 0, size, 0, 0, size, size)
+    }
+}
+
+private fun savePinnedLocation(context: Context, pin: PinnedLocation) {
+    context.getSharedPreferences("nv_map", Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean("has_pinned_location", true)
+        .putLong("pinned_latitude", pin.latitude.toBits())
+        .putLong("pinned_longitude", pin.longitude.toBits())
+        .apply()
+}
+
+private fun loadPinnedLocation(context: Context): PinnedLocation? {
+    val preferences = context.getSharedPreferences("nv_map", Context.MODE_PRIVATE)
+    if (!preferences.getBoolean("has_pinned_location", false)) return null
+    return PinnedLocation(
+        latitude = Double.fromBits(preferences.getLong("pinned_latitude", 0L)),
+        longitude = Double.fromBits(preferences.getLong("pinned_longitude", 0L))
+    )
+}
+
+private fun sharePinnedLocation(context: Context, pin: PinnedLocation) {
+    val message = buildString {
+        appendLine("مکان سنجاق‌شده در NV")
+        appendLine(pin.nvCode)
+        appendLine(pin.coordinates)
+        append(pin.qrPayload)
+    }
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, "مکان ${pin.nvCode}")
+        putExtra(Intent.EXTRA_TEXT, message)
+    }
+    context.startActivity(Intent.createChooser(intent, "اشتراک‌گذاری مکان"))
 }
