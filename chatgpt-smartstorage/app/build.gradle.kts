@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.smartstorage.app"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.smartstorage.app"
