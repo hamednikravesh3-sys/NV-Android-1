@@ -20,7 +20,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="Smart Storage"
+        android:label="Memory"
         android:supportsRtl="true"
         android:theme="@style/Theme.SmartStorage">
         <activity
