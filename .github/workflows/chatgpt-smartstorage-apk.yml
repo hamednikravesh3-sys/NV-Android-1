@@ -1,4 +1,4 @@
-name: Smart Storage APK
+name: Memory APK
 
 on:
   push:
@@ -34,12 +34,12 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
       - name: Stage APK
-        run: cp chatgpt-smartstorage/app/build/outputs/apk/debug/app-debug.apk SmartStorage-debug.apk
+        run: cp chatgpt-smartstorage/app/build/outputs/apk/debug/app-debug.apk Memory.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartStorage-APK
-          path: SmartStorage-debug.apk
+          name: Memory-APK
+          path: Memory.apk
           if-no-files-found: error
           retention-days: 7
