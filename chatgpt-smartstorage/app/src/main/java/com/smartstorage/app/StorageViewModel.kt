@@ -3,9 +3,9 @@ package com.smartstorage.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.smartstorage.app.data.MemoryStorageRepository
 import com.smartstorage.app.data.ScanResult
 import com.smartstorage.app.data.StorageItem
-import com.smartstorage.app.data.StorageRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +23,7 @@ data class StorageUiState(
 )
 
 class StorageViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = StorageRepository(application)
+    private val repository = MemoryStorageRepository(application)
     private val _state = MutableStateFlow(StorageUiState())
     val state: StateFlow<StorageUiState> = _state.asStateFlow()
 
@@ -36,7 +36,13 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
             }.onSuccess { result ->
                 _state.update { it.copy(scanning = false, progress = 100, status = "اسکن کامل شد", result = result) }
             }.onFailure { t ->
-                _state.update { it.copy(scanning = false, error = t.message ?: "خطای ناشناخته", status = "اسکن ناموفق بود") }
+                _state.update {
+                    it.copy(
+                        scanning = false,
+                        error = t.message ?: "خطای ناشناخته",
+                        status = "اسکن ناموفق بود"
+                    )
+                }
             }
         }
     }
@@ -48,7 +54,12 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectRecommended() = _state.update { state ->
-        state.copy(selected = state.result.items.filter { it.riskScore <= 30 }.map { it.key }.toSet())
+        state.copy(
+            selected = state.result.items
+                .filter { it.riskScore <= 30 }
+                .map { it.key }
+                .toSet()
+        )
     }
 
     fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
