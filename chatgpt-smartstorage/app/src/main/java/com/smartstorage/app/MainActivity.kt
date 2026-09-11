@@ -18,7 +18,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smartstorage.app.data.StorageItem
-import com.smartstorage.app.ui.MemoryApp
+import com.smartstorage.app.ui.MemoryAppV3
 
 class MainActivity : ComponentActivity() {
     private val viewModel: StorageViewModel by viewModels()
@@ -50,7 +50,10 @@ class MainActivity : ComponentActivity() {
                             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         )
                     }
-                    getSharedPreferences("storage", MODE_PRIVATE).edit().putString("treeUri", uri.toString()).apply()
+                    getSharedPreferences("storage", MODE_PRIVATE)
+                        .edit()
+                        .putString("treeUri", uri.toString())
+                        .apply()
                     viewModel.scan()
                 }
             }
@@ -61,7 +64,7 @@ class MainActivity : ComponentActivity() {
                 if (result.resultCode == Activity.RESULT_OK) viewModel.scan()
             }
 
-            MemoryApp(
+            MemoryAppV3(
                 state = state,
                 onScan = {
                     val permissions = if (Build.VERSION.SDK_INT >= 33) {
@@ -69,9 +72,13 @@ class MainActivity : ComponentActivity() {
                             add(Manifest.permission.READ_MEDIA_IMAGES)
                             add(Manifest.permission.READ_MEDIA_VIDEO)
                             add(Manifest.permission.READ_MEDIA_AUDIO)
-                            if (Build.VERSION.SDK_INT >= 34) add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                            if (Build.VERSION.SDK_INT >= 34) {
+                                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                            }
                         }.toTypedArray()
-                    } else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    } else {
+                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
                     mediaPermissionLauncher.launch(permissions)
                 },
                 onRequestAllFiles = {
@@ -91,7 +98,12 @@ class MainActivity : ComponentActivity() {
                 onQuery = viewModel::setQuery,
                 onOpenAppStorage = { pkg ->
                     runCatching {
-                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg")))
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:$pkg")
+                            )
+                        )
                     }
                 },
                 onDelete = { items -> requestDelete(items, deleteLauncher) }
@@ -105,7 +117,8 @@ class MainActivity : ComponentActivity() {
     ) {
         if (items.isEmpty()) return
 
-        val mediaUris = items.filter { it.uri.scheme == "content" && it.uri.authority == MediaStore.AUTHORITY }
+        val mediaUris = items
+            .filter { it.uri.scheme == "content" && it.uri.authority == MediaStore.AUTHORITY }
             .map { it.uri }
         val nonMedia = items.filterNot { it.uri in mediaUris }
 
