@@ -28,10 +28,10 @@ class StorageRepository(private val context: Context) {
         val usage = hasUsageAccess()
 
         val items = if (allFiles) {
-            progress(10, "اسکن حافظه مشترک")
+            progress(10, "اسکن کامل حافظه مشترک")
             scanDirectStorage(progress)
         } else {
-            progress(10, "اسکن MediaStore")
+            progress(10, "اسکن فایل‌های قابل مشاهده")
             scanMediaStore(progress)
         }.toMutableList()
 
@@ -51,8 +51,13 @@ class StorageRepository(private val context: Context) {
         val free = stat.availableBytes
         val used = (total - free).coerceAtLeast(0)
         val accessible = deduped.sumOf { it.sizeBytes.coerceAtLeast(0) }
-        val appBytes = apps.sumOf { it.totalBytes.coerceAtLeast(0) }
+
+        // Prefer the aggregate per-user StorageStats value for accounting. It includes
+        // applications that don't expose a launcher activity and is more useful for
+        // explaining protected/private app storage than summing the visible app list.
+        val appBytes = if (usage) queryUserAppStorageTotal() else 0L
         val unresolved = (used - accessible - appBytes).coerceAtLeast(0)
+
         val categories = deduped.groupBy { it.category }
             .map { (category, list) -> CategorySummary(category, list.sumOf { it.sizeBytes }, list.size) }
             .sortedByDescending { it.bytes }
@@ -150,7 +155,7 @@ class StorageRepository(private val context: Context) {
                 }
             }
         } catch (_: SecurityException) {
-            // The UI will explain that full-file access or media permissions are needed.
+            // UI explains that broad-file/media permissions are required for a fuller scan.
         }
         return result
     }
@@ -214,6 +219,17 @@ class StorageRepository(private val context: Context) {
             context.packageName
         )
         return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun queryUserAppStorageTotal(): Long {
+        val statsManager = context.getSystemService(StorageStatsManager::class.java)
+        return runCatching {
+            val stats = statsManager.queryStatsForUser(
+                StorageManager.UUID_DEFAULT,
+                Process.myUserHandle()
+            )
+            (stats.appBytes + stats.dataBytes).coerceAtLeast(0L)
+        }.getOrDefault(0L)
     }
 
     private fun scanAppStorage(): List<AppStorage> {
