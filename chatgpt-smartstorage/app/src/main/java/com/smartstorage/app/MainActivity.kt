@@ -18,7 +18,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.smartstorage.app.data.StorageItem
-import com.smartstorage.app.ui.SmartStorageApp
+import com.smartstorage.app.ui.MemoryApp
 
 class MainActivity : ComponentActivity() {
     private val viewModel: StorageViewModel by viewModels()
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                 if (result.resultCode == Activity.RESULT_OK) viewModel.scan()
             }
 
-            SmartStorageApp(
+            MemoryApp(
                 state = state,
                 onScan = {
                     val permissions = if (Build.VERSION.SDK_INT >= 33) {
